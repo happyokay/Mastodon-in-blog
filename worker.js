@@ -302,10 +302,15 @@ const CLIENT_COMMON_JS = `
     const isoDate = dateStr.replace(' ', 'T') + (dateStr.includes('Z') ? '' : 'Z');
     const date = new Date(isoDate);
     if (isNaN(date.getTime())) return dateStr;
-    return date.toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-      hour: 'numeric', minute: '2-digit'
-    });
+    return date.toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    }).replace(/ /, ' • ');
   }
 
   function formatClientDates() {
@@ -325,6 +330,20 @@ const CLIENT_COMMON_JS = `
       .replace(/\\s(href|src)\\s*=\\s*'\\s*javascript:[^']*'/gi, " $1='#'")
       .replace(/\\s(href|src)\\s*=\\s*javascript:[^\\s>]+/gi, ' $1="#"')
       .replace(/<a\\s/gi, '<a rel="nofollow noopener noreferrer" ');
+  }
+
+  function getEntryOriginalUrlClient(entry) {
+    if (entry && entry.mastodon_url) return String(entry.mastodon_url);
+    const status = String((entry && entry.status) || '');
+    const match = status.match(/\\[(?:Original toot|原文)\\]\\((https?:\\/\\/[^\\s)]+)\\)\\s*$/m);
+    return match ? match[1] : '';
+  }
+
+  function getEntryDisplayStatusClient(entry) {
+    const status = String((entry && entry.status) || '');
+    return status
+      .replace(/\\n*\\[(?:Original toot|原文)\\]\\(https?:\\/\\/[^\\s)]+\\)\\s*$/m, '')
+      .trim();
   }
 
   function renderMarkdownContent(scope) {
@@ -1250,15 +1269,22 @@ function getIndexHTML(entries, env, currentHostname) {
 
   const entriesHTML = entries.length === 0
     ? `<div class="empty-state"><p>No statuses yet.</p></div>`
-    : entries.map(entry => `
+    : entries.map(entry => {
+      const originalUrl = getEntryOriginalUrl(entry);
+      const originalLink = originalUrl
+        ? `<a class="entry-original-link" href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">原文</a>`
+        : '';
+      return `
       <article class="entry">
-        <div class="entry-content${useMdScript ? ' markdown-content' : ''}">${useMdScript ? escapeHtml(entry.status) : renderStatus(entry.status)}</div>
+        <div class="entry-content${useMdScript ? ' markdown-content' : ''}">${useMdScript ? escapeHtml(getEntryDisplayStatus(entry)) : renderStatus(getEntryDisplayStatus(entry))}</div>
         <div class="entry-meta">
+          ${originalLink}
           <span class="entry-date client-date" datetime="${escapeHtml(entry.created_at)}">${formatDate(entry.created_at)}</span>
         </div>
         <a class="entry-link" href="/${entry.id}" aria-label="Open status ${entry.id}"></a>
       </article>
-    `).join('');
+    `;
+    }).join('');
     
   const siteIcon = env.SITE_ICON_URL || 'https://static.mighil.com/images/2026/mystatus.webp';
   
@@ -1346,9 +1372,14 @@ function getIndexHTML(entries, env, currentHostname) {
       gap: 0.5rem;
     }
     .entry {
-      margin-bottom: 1rem;
+      padding-bottom: 3rem;
+      margin-bottom: 3rem;
+      border-bottom: 1px solid var(--border);
       transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
       position: relative;
+    }
+    .entry:last-child {
+      border-bottom: 0;
     }
     .entry:hover {
       border-color: var(--primary);
@@ -1379,11 +1410,15 @@ function getIndexHTML(entries, env, currentHostname) {
     .entry-meta {
       flex: 1;
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 4ch;
       position: relative;
       z-index: 2;
-      pointer-events: none;
+      pointer-events: auto;
     }
+    .entry-original-link { color: var(--primary); font-size: 0.75rem; text-decoration: none; }
+    .entry-original-link:hover { color: var(--primary-hover); text-decoration: underline; }
     .entry-date { color: var(--text-muted); font-size: 0.75rem;}
     .entry-link:focus-visible {
       outline: 2px solid var(--primary);
@@ -1443,9 +1478,14 @@ ${getHead(sitename, siteIcon, extraStyles + (env.CUSTOM_CSS || ''), extraHead)}
               const article = document.createElement('article');
               article.className = 'entry';
               const dt = escapeHtml(String(entry.created_at || ''));
+              const originalUrl = getEntryOriginalUrlClient(entry);
+              const originalLink = originalUrl
+                ? '<a class="entry-original-link" href="' + escapeHtml(originalUrl) + '" target="_blank" rel="noopener noreferrer">原文</a>'
+                : '<span></span>';
               article.innerHTML =
                 '<div class="entry-content' + (useMdScript ? ' markdown-content' : '') + '"></div>' +
                 '<div class="entry-meta">' +
+                  originalLink +
                   '<span class="entry-date client-date" datetime="' + dt + '">' + formatDateString(entry.created_at) + '</span>' +
                 '</div>';
               const overlay = document.createElement('a');
@@ -1455,7 +1495,7 @@ ${getHead(sitename, siteIcon, extraStyles + (env.CUSTOM_CSS || ''), extraHead)}
               article.appendChild(overlay);
               const contentEl = article.querySelector('.entry-content');
               if (useMdScript) {
-                contentEl.textContent = entry.status || '';
+                contentEl.textContent = getEntryDisplayStatusClient(entry);
               } else {
                 contentEl.innerHTML = entry.rendered || '';
               }
@@ -1494,9 +1534,14 @@ function getSingleStatusHTML(entry, env) {
   const siteIcon = env.SITE_ICON_URL || 'https://static.mighil.com/images/2026/mystatus.webp';
   const pageTitle = `Status #${entry.id} - ${sitename}`;
   const useMdScript = isMdScriptEnabled(env.MD_SCRIPT);
+  const originalUrl = getEntryOriginalUrl(entry);
+  const originalLink = originalUrl
+    ? `<a class="entry-original-link" href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">原文</a>`
+    : '<span></span>';
 
-  const statusDescription = entry.status
-    ? entry.status.replace(/\n/g, ' ').slice(0, 160)
+  const displayStatus = getEntryDisplayStatus(entry);
+  const statusDescription = displayStatus
+    ? displayStatus.replace(/\n/g, ' ').slice(0, 160)
     : 'Status update';
 
   const extraHead = `
@@ -1528,6 +1573,17 @@ function getSingleStatusHTML(entry, env) {
       font-size: 0.875rem;
     }
     .back-link:hover { color: var(--primary); text-decoration: underline; }
+    .entry-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 4ch;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .entry-original-link { color: var(--primary); font-size: 0.75rem; text-decoration: none; }
+    .entry-original-link:hover { color: var(--primary-hover); text-decoration: underline; }
     .entry-date { color: var(--text-muted); font-size: 0.75rem; display: inline-block; }
   `;
 
@@ -1544,8 +1600,9 @@ ${getHead(pageTitle, siteIcon, extraStyles + (env.CUSTOM_CSS || ''), extraHead)}
     <a class="back-link" href="/">← Back to all statuses</a>
 
     <article class="entry">
-      <div class="entry-content${useMdScript ? ' markdown-content' : ''}">${useMdScript ? escapeHtml(entry.status) : renderStatus(entry.status)}</div>
+      <div class="entry-content${useMdScript ? ' markdown-content' : ''}">${useMdScript ? escapeHtml(displayStatus) : renderStatus(displayStatus)}</div>
       <div class="entry-meta">
+        ${originalLink}
         <span class="entry-date client-date" datetime="${entry.created_at}">${formatDate(entry.created_at)}</span>
       </div>
     </article>
@@ -2245,9 +2302,13 @@ function getClientScript(env, requestUrl) {
     if (!list || !entries || !entries.length) return;
     var self = this;
     var html = entries.map(function(entry) {
+      var originalUrl = self.getOriginalUrl(entry);
+      var originalLink = originalUrl
+        ? '<a class="gb-entry-original-link" href="' + self.escapeAttribute(originalUrl) + '" target="_blank" rel="noopener noreferrer">原文</a>'
+        : '<span></span>';
       return '<article class="gb-entry">' +
         '<div class="gb-entry-content">' + self.renderEntryContent(entry) + '</div>' +
-        '<div class="gb-entry-meta"><span class="gb-entry-date">' + self.formatDate(entry.created_at) + '</span></div>' +
+        '<div class="gb-entry-meta">' + originalLink + '<span class="gb-entry-date">' + self.formatDate(entry.created_at) + '</span></div>' +
       '</article>';
     }).join('');
     list.insertAdjacentHTML('beforeend', html);
@@ -2315,13 +2376,37 @@ function getClientScript(env, requestUrl) {
     const isoDate = dateString.replace(' ', 'T') + (dateString.includes('Z') ? '' : 'Z');
     const date = new Date(isoDate);
     if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
+    return date.toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    });
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    }).replace(/ /, ' • ');
+  };
+
+  GuestbookWidget.prototype.getOriginalUrl = function(entry) {
+    if (entry && entry.mastodon_url) return String(entry.mastodon_url);
+    var status = String((entry && entry.status) || '');
+    var match = status.match(/\\[(?:Original toot|原文)\\]\\((https?:\\/\\/[^\\s)]+)\\)\\s*$/m);
+    return match ? match[1] : '';
+  };
+
+  GuestbookWidget.prototype.getDisplayStatus = function(entry) {
+    var status = String((entry && entry.status) || '');
+    return status
+      .replace(/\\n*\\[(?:Original toot|原文)\\]\\(https?:\\/\\/[^\\s)]+\\)\\s*$/m, '')
+      .trim();
+  };
+
+  GuestbookWidget.prototype.escapeAttribute = function(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   };
 
   GuestbookWidget.prototype.renderEntryContent = function(entry) {
@@ -2330,7 +2415,7 @@ function getClientScript(env, requestUrl) {
       typeof marked !== 'undefined' &&
       typeof marked.parse === 'function'
     ) {
-      const markdown = (entry && entry.status) || '';
+      const markdown = this.getDisplayStatus(entry);
       return sanitizeRenderedHtml(marked.parse(markdown, { gfm: true, breaks: true }));
     }
     return (entry && entry.rendered) || '';
@@ -2340,6 +2425,30 @@ function getClientScript(env, requestUrl) {
   const style = document.createElement('style');
   style.textContent = \`
     .gb-widget { font-family: inherit; color: inherit; }
+    .gb-entry {
+      padding-bottom: 3rem;
+      margin-bottom: 3rem;
+      border-bottom: 1px solid rgba(0,0,0,0.14);
+    }
+    .gb-entry:last-child { border-bottom: 0; }
+    .gb-entry-content { margin-bottom: 0.85rem; }
+    .gb-entry-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 4ch;
+      color: inherit;
+      opacity: 0.72;
+      font-size: 0.9em;
+    }
+    .gb-entry-original-link {
+      color: #2563eb;
+      text-decoration: none;
+    }
+    .gb-entry-original-link:hover { color: #1d4ed8; text-decoration: underline; }
+    .gb-entry-date {
+      white-space: nowrap;
+    }
     .gb-load-more-btn {
       cursor: pointer;
       font: inherit;
@@ -2385,13 +2494,29 @@ function formatDate(dateString) {
   const date = new Date(isoDate);
   if (isNaN(date.getTime())) return dateString;
 
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
+  return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  });
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).replace(/ /, ' • ');
+}
+
+function getEntryOriginalUrl(entry) {
+  if (entry && entry.mastodon_url) return String(entry.mastodon_url);
+  const status = String((entry && entry.status) || '');
+  const match = status.match(/\[(?:Original toot|原文)\]\((https?:\/\/[^\s)]+)\)\s*$/m);
+  return match ? match[1] : '';
+}
+
+function getEntryDisplayStatus(entry) {
+  const status = String((entry && entry.status) || '');
+  return status
+    .replace(/\n*\[(?:Original toot|原文)\]\(https?:\/\/[^\s)]+\)\s*$/m, '')
+    .trim();
 }
 
 function normalizeMastodonInstanceUrl(rawUrl) {
@@ -2481,7 +2606,7 @@ function mastodonStatusToEntryText(status) {
 
   const originalUrl = status.url || status.uri || '';
   if (isAllowedHttpUrl(originalUrl)) {
-    parts.push(`[Original toot](${originalUrl})`);
+    parts.push(`[原文](${originalUrl})`);
   }
 
   return parts.join('\n\n').trim();
@@ -2828,7 +2953,7 @@ export default {
         const limit = ENTRIES_PAGE_LIMIT;
         const cursor = url.searchParams.get('cursor');
 
-        let query = 'SELECT id, status, created_at FROM entries';
+        let query = 'SELECT id, status, created_at, mastodon_url FROM entries';
         const params = [];
 
         if (cursor) {
@@ -2842,7 +2967,7 @@ export default {
         const entries = await env.DB.prepare(query).bind(...params).all();
         const results = (entries.results || []).map(entry => ({
           ...entry,
-          rendered: renderStatus(entry.status)
+          rendered: renderStatus(getEntryDisplayStatus(entry))
         }));
         const nextCursor = results.length === limit ? results[results.length - 1].id : null;
 
@@ -3323,7 +3448,7 @@ export default {
       if (statusPathMatch) {
         const statusId = parseInt(statusPathMatch[1], 10);
         const entry = await env.DB.prepare(
-          'SELECT id, status, created_at FROM entries WHERE id = ? LIMIT 1'
+          'SELECT id, status, created_at, mastodon_url FROM entries WHERE id = ? LIMIT 1'
         ).bind(statusId).first();
 
         if (!entry) {
@@ -3341,7 +3466,7 @@ export default {
       // Index page
       if (path === '/') {
         const entries = await env.DB.prepare(
-          'SELECT id, status, created_at FROM entries ORDER BY id DESC LIMIT ?'
+          'SELECT id, status, created_at, mastodon_url FROM entries ORDER BY id DESC LIMIT ?'
         ).bind(ENTRIES_PAGE_LIMIT).all();
         
         return new Response(getIndexHTML(entries.results || [], config, url.hostname), {

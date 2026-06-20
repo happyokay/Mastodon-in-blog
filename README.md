@@ -1,5 +1,7 @@
 # Mastodon in Blog
 
+[中文说明](README.zh-CN.md)
+
 Embed a Mastodon-powered microblog stream inside WordPress, Bear Blog, or any page that can load a small script.
 
 This project is based on [MyStatus](https://github.com/verfasor/MyStatus). It keeps the original single-file Cloudflare Worker shape, D1 storage, admin UI, Atom feed, sitemap, and `/client.js` embed script, then adds Mastodon sync.
