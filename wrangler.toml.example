@@ -1,0 +1,23 @@
+name = "mastodon-in-blog"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mastodon-in-blog"
+database_id = "replace-with-your-d1-database-id"
+
+[vars]
+SITENAME = "Status"
+SITE_DESCRIPTION = "A personal Mastodon stream."
+MASTODON_INSTANCE_URL = "https://mastodon.social"
+MASTODON_USERNAME = "yourname"
+MASTODON_IMPORT_LIMIT = "20"
+MASTODON_INCLUDE_REPLIES = "false"
+MASTODON_INCLUDE_REBLOGS = "false"
+ALLOWED_ORIGINS = "https://your-bearblog.example,https://your-wordpress.example"
+# API_URL is optional. Set it to your production Worker URL if the embed is served behind a custom route.
+# API_URL = "https://mastodon-in-blog.your-subdomain.workers.dev"
+
+[triggers]
+crons = ["*/30 * * * *"]

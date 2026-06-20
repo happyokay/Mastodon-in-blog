@@ -11,6 +11,10 @@ const MARKED_BROWSER_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.mi
 /** Page size for index first paint, Load more, and `/api/entries` (embed uses the same API). */
 const ENTRIES_PAGE_LIMIT = 10;
 
+/** Mastodon import defaults. Media binaries are not stored in D1, only remote media URLs. */
+const MASTODON_DEFAULT_LIMIT = 20;
+const MASTODON_MAX_LIMIT = 40;
+
 /** Experimental R2 public media at `/media/<key>` (bind bucket as `MEDIA` in wrangler). */
 const MEDIA_KEY_MAX = 120;
 const MEDIA_LIST_LIMIT = 500;
@@ -875,19 +879,48 @@ async function initializeDatabase(env) {
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        source TEXT NOT NULL DEFAULT 'manual',
+        mastodon_id TEXT,
+        mastodon_url TEXT,
+        updated_at TEXT
       )`),
       env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_created_at ON entries(created_at)`),
+      env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_mastodon_id ON entries(mastodon_id)`),
+      env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_entries_source_created_at ON entries(source, created_at)`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
       )`)
     ];
     await env.DB.batch(batch);
+    await ensureEntriesMigration(env);
     console.log('Database initialized');
   } catch (e) {
     console.error('Failed to initialize database', e);
   }
+}
+
+async function ensureEntriesMigration(env) {
+  const columns = await env.DB.prepare('PRAGMA table_info(entries)').all();
+  const names = new Set((columns.results || []).map(row => row.name));
+  const additions = [
+    ['source', "TEXT NOT NULL DEFAULT 'manual'"],
+    ['mastodon_id', 'TEXT'],
+    ['mastodon_url', 'TEXT'],
+    ['updated_at', 'TEXT']
+  ];
+
+  for (const [name, definition] of additions) {
+    if (!names.has(name)) {
+      await env.DB.prepare(`ALTER TABLE entries ADD COLUMN ${name} ${definition}`).run();
+    }
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_mastodon_id ON entries(mastodon_id)`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_entries_source_created_at ON entries(source, created_at)`)
+  ]);
 }
 
 async function getAppConfig(env) {
@@ -906,7 +939,10 @@ async function getAppConfig(env) {
     ADMIN_PASSWORD: env.ADMIN_PASSWORD,
     SESSION_SECRET: env.SESSION_SECRET,
     DB: env.DB,
-    API_URL: env.API_URL
+    API_URL: env.API_URL,
+    MASTODON_INSTANCE_URL: env.MASTODON_INSTANCE_URL,
+    MASTODON_USERNAME: env.MASTODON_USERNAME,
+    MASTODON_ACCOUNT_ID: env.MASTODON_ACCOUNT_ID
   };
 
   try {
@@ -2358,6 +2394,194 @@ function formatDate(dateString) {
   });
 }
 
+function normalizeMastodonInstanceUrl(rawUrl) {
+  const value = String(rawUrl || '').trim().replace(/\/+$/, '');
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+    return url.origin;
+  } catch (e) {
+    return '';
+  }
+}
+
+function parseBooleanEnv(value, fallback) {
+  if (value == null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function clampImportLimit(rawLimit) {
+  const n = parseInt(rawLimit || MASTODON_DEFAULT_LIMIT, 10);
+  if (!Number.isFinite(n) || n <= 0) return MASTODON_DEFAULT_LIMIT;
+  return Math.min(n, MASTODON_MAX_LIMIT);
+}
+
+function decodeHtmlEntities(text) {
+  const named = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    nbsp: ' '
+  };
+  return String(text || '').replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
+    if (entity[0] === '#') {
+      const isHex = entity[1] && entity[1].toLowerCase() === 'x';
+      const code = parseInt(isHex ? entity.slice(2) : entity.slice(1), isHex ? 16 : 10);
+      if (Number.isFinite(code)) {
+        try {
+          return String.fromCodePoint(code);
+        } catch (e) {
+          return match;
+        }
+      }
+    }
+    return Object.prototype.hasOwnProperty.call(named, entity) ? named[entity] : match;
+  });
+}
+
+function htmlToPlainMarkdown(html) {
+  let text = String(html || '');
+  text = text
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<\/div>\s*<div[^>]*>/gi, '\n')
+    .replace(/<\/li>\s*<li[^>]*>/gi, '\n- ')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (m, href, label) => {
+      const cleanHref = String(href || '').trim();
+      const cleanLabel = decodeHtmlEntities(String(label || '').replace(/<[^>]+>/g, '')).trim();
+      if (!isAllowedHttpUrl(cleanHref)) return cleanLabel;
+      return cleanLabel && cleanLabel !== cleanHref ? `[${cleanLabel}](${cleanHref})` : cleanHref;
+    })
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return decodeHtmlEntities(text);
+}
+
+function mastodonStatusToEntryText(status) {
+  const parts = [];
+  const content = htmlToPlainMarkdown(status.content || '');
+  if (content) parts.push(content);
+
+  const media = Array.isArray(status.media_attachments) ? status.media_attachments : [];
+  for (const attachment of media) {
+    if (!attachment || attachment.type !== 'image') continue;
+    const mediaUrl = attachment.url || attachment.preview_url || '';
+    if (!isAllowedHttpUrl(mediaUrl)) continue;
+    const alt = attachment.description || '';
+    parts.push(`![${alt.replace(/[\]\n\r]/g, ' ').trim()}](${mediaUrl})`);
+  }
+
+  const originalUrl = status.url || status.uri || '';
+  if (isAllowedHttpUrl(originalUrl)) {
+    parts.push(`[Original toot](${originalUrl})`);
+  }
+
+  return parts.join('\n\n').trim();
+}
+
+function toSqliteDateTime(isoString) {
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+async function mastodonFetchJson(url, env) {
+  const headers = { 'Accept': 'application/json' };
+  if (env.MASTODON_ACCESS_TOKEN) {
+    headers.Authorization = `Bearer ${env.MASTODON_ACCESS_TOKEN}`;
+  }
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Mastodon request failed (${response.status}): ${text.slice(0, 160)}`);
+  }
+  return response.json();
+}
+
+async function getMastodonAccountId(instanceUrl, env) {
+  if (env.MASTODON_ACCOUNT_ID) return String(env.MASTODON_ACCOUNT_ID).trim();
+  const username = String(env.MASTODON_USERNAME || '').trim().replace(/^@/, '');
+  if (!username) {
+    throw new Error('Set MASTODON_ACCOUNT_ID or MASTODON_USERNAME');
+  }
+  const lookupUrl = new URL('/api/v1/accounts/lookup', instanceUrl);
+  lookupUrl.searchParams.set('acct', username);
+  const account = await mastodonFetchJson(lookupUrl.toString(), env);
+  if (!account || !account.id) {
+    throw new Error('Mastodon account lookup returned no account id');
+  }
+  return account.id;
+}
+
+async function syncMastodonStatuses(env) {
+  await initializeDatabase(env);
+
+  const instanceUrl = normalizeMastodonInstanceUrl(env.MASTODON_INSTANCE_URL);
+  if (!instanceUrl) {
+    throw new Error('Set MASTODON_INSTANCE_URL to your Mastodon instance origin');
+  }
+
+  const accountId = await getMastodonAccountId(instanceUrl, env);
+  const limit = clampImportLimit(env.MASTODON_IMPORT_LIMIT);
+  const includeReplies = parseBooleanEnv(env.MASTODON_INCLUDE_REPLIES, false);
+  const includeReblogs = parseBooleanEnv(env.MASTODON_INCLUDE_REBLOGS, false);
+
+  const statusesUrl = new URL(`/api/v1/accounts/${encodeURIComponent(accountId)}/statuses`, instanceUrl);
+  statusesUrl.searchParams.set('limit', String(limit));
+  statusesUrl.searchParams.set('exclude_replies', includeReplies ? 'false' : 'true');
+  statusesUrl.searchParams.set('exclude_reblogs', includeReblogs ? 'false' : 'true');
+
+  const statuses = await mastodonFetchJson(statusesUrl.toString(), env);
+  const importable = (Array.isArray(statuses) ? statuses : [])
+    .filter(status => status && status.id && !status.reblog)
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  let imported = 0;
+  let skipped = 0;
+  const stmt = env.DB.prepare(`
+    INSERT INTO entries (status, created_at, source, mastodon_id, mastodon_url, updated_at)
+    VALUES (?, ?, 'mastodon', ?, ?, datetime('now'))
+    ON CONFLICT(mastodon_id) DO UPDATE SET
+      status = excluded.status,
+      created_at = excluded.created_at,
+      mastodon_url = excluded.mastodon_url,
+      updated_at = datetime('now')
+  `);
+
+  const batch = [];
+  for (const status of importable) {
+    const text = mastodonStatusToEntryText(status);
+    const createdAt = toSqliteDateTime(status.created_at);
+    if (!text || !createdAt) {
+      skipped += 1;
+      continue;
+    }
+    batch.push(stmt.bind(text, createdAt, String(status.id), status.url || status.uri || ''));
+  }
+
+  if (batch.length > 0) {
+    await env.DB.batch(batch);
+    imported = batch.length;
+  }
+
+  return {
+    success: true,
+    imported,
+    skipped,
+    fetched: importable.length,
+    accountId,
+    instanceUrl
+  };
+}
+
 /** R2 object `uploaded` (Date, ms, or ISO string) -> same display as status dates. */
 function formatUploadedDate(uploaded) {
   if (uploaded == null || uploaded === '') return '';
@@ -2517,6 +2741,10 @@ ${statusUrls}
 
 // Main handler
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(syncMastodonStatuses(env));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -2732,6 +2960,13 @@ export default {
           await saveAppSettings(env, settings);
           
           return new Response(JSON.stringify({ success: true }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (path === '/api/sync/mastodon' && request.method === 'POST') {
+          const result = await syncMastodonStatuses(env);
+          return new Response(JSON.stringify(result), {
             headers: { 'Content-Type': 'application/json' }
           });
         }

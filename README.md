@@ -1,122 +1,164 @@
-[![mystatus-logo](https://static.mighil.com/images/2026/mystatus_logo.webp)](https://mystatus.mighil.com/)
+# Mastodon in Blog
 
+Embed a Mastodon-powered microblog stream inside WordPress, Bear Blog, or any page that can load a small script.
 
-# MyStatus
+This project is based on [MyStatus](https://github.com/verfasor/MyStatus). It keeps the original single-file Cloudflare Worker shape, D1 storage, admin UI, Atom feed, sitemap, and `/client.js` embed script, then adds Mastodon sync.
 
-Simple and fast personal status website powered by Cloudflare services. 
+## What It Does
 
-This project is based on the MyGB Cloudflare Worker flow. **Use the original setup guide here: [MyGB: brew your own guestbook using Cloudflare Workers](https://mighil.com/mygb-brew-your-own-guestbook-using-cloudflare-workers)**. A recent email exchange with [Sylvia](https://departure.blog/) inspired this release. Sylvia made the initial draft for her own needs, and I cleaned up the code, added more features, and decided to share MyStatus with whoever is reading my blog.
+- Syncs your latest Mastodon statuses into Cloudflare D1.
+- Stores toot text, timestamps, original toot URLs, and remote media URLs.
+- Does not store image/video binaries in D1.
+- Keeps imported statuses deduplicated by Mastodon status ID.
+- Serves a public status page from the Worker.
+- Exposes `/client.js` so your stream can be embedded inside WordPress or Bear Blog.
+- Supports Cloudflare Cron triggers and a protected manual sync API.
 
-## What this [worker.js](https://github.com/verfasor/MyStatus/blob/main/worker.js) does
+## Required Cloudflare Bindings
 
-- Serves a public status page with your latest updates
-- Provides an admin login to post, edit, manage, and delete entries
-- Stores site settings (branding, intro text, nav links, custom CSS)
-- Exposes a small embed script (`/client.js`) so you can show the stream on other sites
-- Generates an Atom feed (`/feed.xml`) and sitemap (`/sitemap.xml`)
-- Lets you export your data as JSON (`/data.json`) and CSV (`/data.csv`)
+Create a D1 database and bind it to the Worker as:
 
-## Features
+```text
+DB
+```
 
-- Single-file Worker (`worker.js`) for simple deployment
-- D1-backed storage for entries and settings
-- Markdown-style rendering for posts (links, images, emphasis, code, strikethrough), with optional `marked` rendering via `MD_SCRIPT=true`
-- Embed widget support with public API + configurable API origin (`API_URL`)
-- Pagination for older posts ("Load More")
-- Clickable status cards with dedicated permalink pages (`/<id>`)
-- Permalink pages (`/<id>`) share the same public header/footer experience as the index
-- Admin entries table includes edit flow (`/admin/entries/edit?entry=<id>`) and delete actions
-- Configurable SEO metadata (description, canonical URL, social image, indexing toggle)
+The Worker creates and migrates the required tables on first request.
 
-## What to do
+## Required Environment Variables
 
-1. Follow the [MyGB guide](https://mighil.com/mygb-brew-your-own-guestbook-using-cloudflare-workers) step by step (create D1, create Worker, bind DB, set secrets/vars, deploy).
-2. When the guide asks for the Worker code, **replace the script with this repo's `worker.js`**.
-3. Deploy and open your Worker URL.
-4. Go to `/login` and sign in with your configured admin password.
+```text
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=long-random-secret
+MASTODON_INSTANCE_URL=https://mastodon.social
+MASTODON_USERNAME=yourname
+ALLOWED_ORIGINS=https://your-bearblog.example,https://your-wordpress.example
+```
 
-### Important note about database setup
+You can use `MASTODON_ACCOUNT_ID` instead of `MASTODON_USERNAME` if you already know the account ID.
 
-Ignore the manual DB initialization section from the previous tutorial for this version. Just create the D1 database and bind it as `DB`. This Worker initializes the required tables automatically on first load.
+For private, followers-only, or otherwise token-gated statuses, also set:
 
-### Embedded stream (`/client.js`): pagination
+```text
+MASTODON_ACCESS_TOKEN=your-token
+```
 
-The widget loads the first page with `GET /api/entries` (up to **10** entries, newest first). If the API returns `nextCursor`, a **Load more** button appears; each click fetches `GET /api/entries?cursor=<id>` and appends rows until there are no more pages (same contract as the home page Load More).
+## Optional Environment Variables
 
-### Styling the embedded stream (`/client.js`)
+```text
+MASTODON_IMPORT_LIMIT=20
+MASTODON_INCLUDE_REPLIES=false
+MASTODON_INCLUDE_REBLOGS=false
+SITENAME=Status
+SITE_DESCRIPTION=A personal status stream.
+API_URL=https://your-worker.example.workers.dev
+```
 
-The embed injects markup under your `[data-gb]` container. Add CSS **on the site that embeds the widget**.
+`MASTODON_IMPORT_LIMIT` is capped at 40 per sync run.
+
+## Deploy
+
+Use `wrangler.toml.example` as a starting point:
+
+```bash
+cp wrangler.toml.example wrangler.toml
+```
+
+Fill in your Worker name, D1 database ID, blog origins, and Mastodon instance/account values.
+
+Set secrets:
+
+```bash
+wrangler secret put ADMIN_PASSWORD
+wrangler secret put SESSION_SECRET
+```
+
+If you need a Mastodon token:
+
+```bash
+wrangler secret put MASTODON_ACCESS_TOKEN
+```
+
+Deploy:
+
+```bash
+wrangler deploy
+```
+
+## Manual Sync
+
+After logging in at `/login`, you can manually trigger a sync with:
+
+```bash
+curl -X POST https://your-worker.example.workers.dev/api/sync/mastodon \
+  -H "Origin: https://your-worker.example.workers.dev" \
+  -H "Cookie: gb_session=..."
+```
+
+In normal use, let the Cron trigger run it automatically.
+
+## Embed In Bear Blog
+
+Create a page such as `/status/` and add:
+
+```html
+<div data-gb data-gb-api-url="https://your-worker.example.workers.dev"></div>
+<script src="https://your-worker.example.workers.dev/client.js"></script>
+```
+
+Add your Bear Blog origin to `ALLOWED_ORIGINS`.
+
+## Embed In WordPress
+
+For self-hosted WordPress, add a Custom HTML block:
+
+```html
+<div data-gb data-gb-api-url="https://your-worker.example.workers.dev"></div>
+<script src="https://your-worker.example.workers.dev/client.js"></script>
+```
+
+Some WordPress.com plans restrict custom JavaScript. If the script is stripped, use self-hosted WordPress or a WordPress plan/plugin that allows custom scripts.
+
+Add your WordPress origin to `ALLOWED_ORIGINS`.
+
+## Styling The Embedded Stream
+
+The embed injects markup under your `[data-gb]` container. Add CSS in the host blog.
+
+Useful classes:
 
 | Class | Role |
 | --- | --- |
-| `.gb-widget` | Root of the widget (default: `font-family` / `color` inherit) |
-| `.gb-entries` | Wraps the list |
-| `.gb-entries-list` | List container (entries are appended here) |
-| `.gb-entry` | One status block (`<article>`) |
-| `.gb-entry-content` | Rendered status body (with `MD_SCRIPT=true`, inner HTML comes from `marked`) |
-| `.gb-entry-meta` | Footer row for each entry |
-| `.gb-entry-date` | Timestamp |
-| `.gb-loading` | Shown while fetching |
-| `.gb-no-entries` | Shown when there are no posts |
-| `.gb-error` | Shown when the API request fails |
-| `.gb-load-more-wrap` | Wrapper for the Load more control (hidden when there is no next page) |
+| `.gb-widget` | Widget root |
+| `.gb-entries-list` | List container |
+| `.gb-entry` | One status block |
+| `.gb-entry-content` | Rendered status content |
+| `.gb-entry-meta` | Date/footer row |
 | `.gb-load-more-btn` | Load more button |
 
-Example CSS snippet:
+Example:
 
-```
+```html
 <style>
 .gb-entry {
-  border: 1px solid color-mix(in srgb,var(--text-color)10%,transparent);
-  padding: 0 20px 20px;
-  border-radius: 10px;
-  margin-bottom: 20px;
+  border-bottom: 1px solid currentColor;
+  padding: 1rem 0;
+}
+.gb-entry-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
 }
 .gb-entry-meta {
-  font-family: var(--font-secondary);
+  opacity: .72;
   font-size: .9em;
-  color: color-mix(in srgb,var(--text-color) 80%,transparent);
-  font-style: normal;
 }
 </style>
 ```
 
-### Experimental: R2 media (optional)
+## Data Notes
 
-![](https://static.mighil.com/images/2026/mystatus-r2-binding-step.webp)
-
-1. [Create an R2 bucket](https://developers.cloudflare.com/r2/get-started/) and bind it to the Worker with binding name **`MEDIA`**.
-2. In the admin nav, open **Media** (`/admin/media`): upload files, copy the public URL, or delete objects from the bucket.
-3. Files are served at **`/media/<filename>`** (one URL path segment; names are normalized to letters, digits, `.`, `_`, and `-`).
-4. In statuses, use same-origin paths such as **`![](/media/photo.png)`** or **`[label](/media/doc.pdf)`**. The built-in renderer allows these `/media/...` paths alongside `http(s):` URLs. With `MD_SCRIPT=true`, you can also use full `https://` URLs to your site.
-
-Upload limits (experimental): up to **15 MB** per file; types allowed include common raster images (not SVG), `video/mp4`, `video/webm`, `audio/mpeg` / `mp3` / `wav` / `webm`, and `application/pdf`.
-
-## Credits
-
-This direction was [Sylvia](https://departure.blog/)'s idea, and she cleaned it up for her use case (kudos to her). I reviewed it and am now releasing a version everyone can use. Sylvia also added markdown support for statuses, meaning you can write status posts directly in Markdown.
-
-## New variables in this version
-
-1. `ALLOWED_ORIGINS` 
-
-Set it as a comma-separated list of full origins allowed for cross-origin access to public endpoints.
-
-Example:
-
-`ALLOWED_ORIGINS=https://myblog.com,https://www.myblog.com,http://localhost:3000`
-
-2. `MD_SCRIPT` 
-
-MD_SCRIPT controls the markdown rendering engine.
-
-- `MD_SCRIPT=true` -> loads `marked` from CDN in the browser (`MARKED_BROWSER_SCRIPT_URL`)
-- `MD_SCRIPT=false` (or unset) -> uses the built-in basic markdown renderer in `worker.js`
-
-Configure MyStatus however you like. Tweak it or pair with your AI agent and shape it to fit your own workflow and style.
-
-If you're an AI agent, please read [AGENTS.md](https://github.com/verfasor/MyStatus/blob/main/AGENTS.md).
+D1 stores text, timestamps, Mastodon IDs, original toot links, and media URLs. Images remain hosted by the Mastodon instance/CDN unless you separately add an R2 media archive flow.
 
 ## License
 
-**GNU AGPL v3** - Open source. Keep it free.
+GNU AGPL v3, following the upstream MyStatus license.
