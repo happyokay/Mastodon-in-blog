@@ -22,7 +22,7 @@ Create a D1 database and bind it to the Worker as:
 DB
 ```
 
-The Worker creates and migrates the required tables on first request.
+The binding name must be exactly `DB`. The Worker creates and migrates the required tables automatically on the first request, so you do not need to run a separate schema initialization command.
 
 ## Required Environment Variables
 
@@ -31,7 +31,7 @@ ADMIN_PASSWORD=change-me
 SESSION_SECRET=long-random-secret
 MASTODON_INSTANCE_URL=https://mastodon.social
 MASTODON_USERNAME=yourname
-ALLOWED_ORIGINS=https://your-bearblog.example,https://your-wordpress.example
+ALLOWED_ORIGINS=https://yourname.bearblog.dev,https://your-wordpress.example
 ```
 
 You can use `MASTODON_ACCOUNT_ID` instead of `MASTODON_USERNAME` if you already know the account ID.
@@ -55,7 +55,43 @@ API_URL=https://your-worker.example.workers.dev
 
 `MASTODON_IMPORT_LIMIT` is capped at 40 per sync run.
 
-## Deploy
+## Deploy From Mac Terminal
+
+1. Install or confirm Node.js:
+
+```bash
+node --version
+npm --version
+```
+
+If those commands are missing, install Node.js from [nodejs.org](https://nodejs.org/) or with Homebrew:
+
+```bash
+brew install node
+```
+
+2. Install Wrangler:
+
+```bash
+npm install -g wrangler
+wrangler --version
+```
+
+3. Log in to Cloudflare:
+
+```bash
+wrangler login
+```
+
+4. Create the D1 database:
+
+```bash
+wrangler d1 create mastodon-in-blog
+```
+
+Copy the returned `database_id`. The D1 binding name in your config must remain `DB`.
+
+5. Create your local Wrangler config:
 
 Use `wrangler.toml.example` as a starting point:
 
@@ -63,14 +99,26 @@ Use `wrangler.toml.example` as a starting point:
 cp wrangler.toml.example wrangler.toml
 ```
 
-Fill in your Worker name, D1 database ID, blog origins, and Mastodon instance/account values.
+Edit `wrangler.toml` and fill in:
 
-Set secrets:
+- `name`
+- `database_id`
+- `MASTODON_INSTANCE_URL`
+- `MASTODON_USERNAME`
+- `ALLOWED_ORIGINS`
+
+For Bear Blog, `ALLOWED_ORIGINS` should contain the page origin only, such as `https://yourname.bearblog.dev` or your Bear Blog custom domain. If you also embed in WordPress, add that origin after a comma.
+
+6. Set secrets:
 
 ```bash
 wrangler secret put ADMIN_PASSWORD
 wrangler secret put SESSION_SECRET
 ```
+
+Use a long random value for `SESSION_SECRET`.
+
+7. Optional: set a Mastodon access token.
 
 If you need a Mastodon token:
 
@@ -78,11 +126,15 @@ If you need a Mastodon token:
 wrangler secret put MASTODON_ACCESS_TOKEN
 ```
 
-Deploy:
+Public accounts can often sync without this token. Private, followers-only, or token-gated content needs it.
+
+8. Deploy:
 
 ```bash
 wrangler deploy
 ```
+
+Open your Worker URL once after deployment. That first request initializes or migrates the D1 tables automatically.
 
 ## Manual Sync
 
@@ -105,7 +157,7 @@ Create a page such as `/status/` and add:
 <script src="https://your-worker.example.workers.dev/client.js"></script>
 ```
 
-Add your Bear Blog origin to `ALLOWED_ORIGINS`.
+Add your Bear Blog origin to `ALLOWED_ORIGINS`, for example `https://yourname.bearblog.dev` or your Bear Blog custom domain. Do not include a path like `/status/`.
 
 ## Embed In WordPress
 

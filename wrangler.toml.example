@@ -15,7 +15,7 @@ MASTODON_USERNAME = "yourname"
 MASTODON_IMPORT_LIMIT = "20"
 MASTODON_INCLUDE_REPLIES = "false"
 MASTODON_INCLUDE_REBLOGS = "false"
-ALLOWED_ORIGINS = "https://your-bearblog.example,https://your-wordpress.example"
+ALLOWED_ORIGINS = "https://yourname.bearblog.dev,https://your-wordpress.example"
 # API_URL is optional. Set it to your production Worker URL if the embed is served behind a custom route.
 # API_URL = "https://mastodon-in-blog.your-subdomain.workers.dev"
 
