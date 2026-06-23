@@ -119,6 +119,13 @@ const CORS_HEADERS = {
   'Access-Control-Max-Age': '86400'
 };
 
+const PUBLIC_READ_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400'
+};
+
 // Access-Control-Allow-Origin
 function getAllowedOrigin(request, env) {
   const origin = request.headers.get('Origin');
@@ -2888,6 +2895,10 @@ export default {
 
     try {
       if (request.method === 'OPTIONS') {
+        if (path === '/api/entries' || path === '/client.js') {
+          return new Response(null, { headers: PUBLIC_READ_CORS_HEADERS });
+        }
+
         const allowedOrigin = getAllowedOrigin(request, env);
         return new Response(null, {
           headers: {
@@ -2981,12 +2992,12 @@ export default {
         }));
         const nextCursor = results.length === limit ? results[results.length - 1].id : null;
 
-        const allowedOrigin = getAllowedOrigin(request, env);
         return new Response(JSON.stringify({ success: true, entries: results, nextCursor }), {
-          headers: Object.assign(
-            { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=60' },
-            allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin } : {}
-          )
+          headers: {
+            ...PUBLIC_READ_CORS_HEADERS,
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=60, s-maxage=60'
+          }
         });
       }
 
@@ -3384,12 +3395,12 @@ export default {
 
       // Client script
       if (path === '/client.js') {
-        const allowedOrigin = getAllowedOrigin(request, env);
         return new Response(getClientScript(config, request.url), {
-          headers: Object.assign(
-            { 'Content-Type': 'application/javascript' },
-            allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin } : {}
-          )
+          headers: {
+            ...PUBLIC_READ_CORS_HEADERS,
+            'Content-Type': 'application/javascript',
+            'Cache-Control': 'public, max-age=300, s-maxage=300'
+          }
         });
       }
 
