@@ -1417,8 +1417,8 @@ function getIndexHTML(entries, env, currentHostname) {
       z-index: 2;
       pointer-events: auto;
     }
-    .entry-original-link { color: var(--primary); font-size: 0.75rem; text-decoration: none; }
-    .entry-original-link:hover { color: var(--primary-hover); text-decoration: underline; }
+    .entry-original-link { color: #59256a; font-size: 0.75rem; text-decoration: none; }
+    .entry-original-link:hover { color: #59256a; text-decoration: underline; }
     .entry-date { color: var(--text-muted); font-size: 0.75rem;}
     .entry-link:focus-visible {
       outline: 2px solid var(--primary);
@@ -1582,8 +1582,8 @@ function getSingleStatusHTML(entry, env) {
       padding-top: 1rem;
       border-top: 1px solid var(--border);
     }
-    .entry-original-link { color: var(--primary); font-size: 0.75rem; text-decoration: none; }
-    .entry-original-link:hover { color: var(--primary-hover); text-decoration: underline; }
+    .entry-original-link { color: #59256a; font-size: 0.75rem; text-decoration: none; }
+    .entry-original-link:hover { color: #59256a; text-decoration: underline; }
     .entry-date { color: var(--text-muted); font-size: 0.75rem; display: inline-block; }
   `;
 
@@ -2442,10 +2442,10 @@ function getClientScript(env, requestUrl) {
       font-size: 0.9em;
     }
     .gb-entry-original-link {
-      color: #2563eb;
+      color: #59256a;
       text-decoration: none;
     }
-    .gb-entry-original-link:hover { color: #1d4ed8; text-decoration: underline; }
+    .gb-entry-original-link:hover { color: #59256a; text-decoration: underline; }
     .gb-entry-date {
       white-space: nowrap;
     }
@@ -2773,10 +2773,21 @@ function getAtomEntryTitle(entry) {
   return escapeHtml(display);
 }
 
+function getPublicBaseUrl(config, requestOrigin) {
+  const rawBaseUrl = String(config.CANONICAL_URL || config.API_URL || requestOrigin || '').trim();
+  if (!rawBaseUrl) return '';
+
+  try {
+    const parsed = new URL(rawBaseUrl);
+    return parsed.origin + parsed.pathname.replace(/\/$/, '');
+  } catch (e) {
+    return String(requestOrigin || '').replace(/\/$/, '');
+  }
+}
+
 // RSS feed
-function getFeedXML(entries, config) {
-  const siteUrl = config.CANONICAL_URL || config.API_URL || '';
-  const feedBaseUrl = String(siteUrl).replace(/\/$/, '');
+function getFeedXML(entries, config, requestOrigin) {
+  const feedBaseUrl = getPublicBaseUrl(config, requestOrigin);
   const sitename = config.SITENAME || 'Status';
 
   // Use the most recent entry date as the feed's updated timestamp, or now if empty
@@ -2784,8 +2795,7 @@ function getFeedXML(entries, config) {
     ? entries[0].created_at.replace(' ', 'T') + (entries[0].created_at.includes('Z') ? '' : 'Z')
     : new Date().toISOString();
 
-  // Extract hostname once for use in all entry tag URIs
-  const hostname = new URL(siteUrl).hostname;
+  const hostname = feedBaseUrl ? new URL(feedBaseUrl).hostname : 'localhost';
 
   const entryItems = entries.map(entry => {
     // Normalise SQLite date to ISO 8601 UTC
@@ -2835,7 +2845,7 @@ ${entryItems}
 }
 
 function getSitemapXML(entries, config, requestOrigin) {
-  const baseUrl = String(config.CANONICAL_URL || config.API_URL || requestOrigin || '').replace(/\/$/, '');
+  const baseUrl = getPublicBaseUrl(config, requestOrigin);
 
   const homeLastmod = entries.length > 0
     ? entries[0].created_at.replace(' ', 'T') + (entries[0].created_at.includes('Z') ? '' : 'Z')
@@ -2897,7 +2907,7 @@ export default {
         const entries = await env.DB.prepare(
           'SELECT id, status, created_at FROM entries ORDER BY id DESC LIMIT 10'
         ).all();
-        return new Response(getFeedXML(entries.results || [], config), {
+        return new Response(getFeedXML(entries.results || [], config, url.origin), {
           headers: {
             'Content-Type': 'application/atom+xml; charset=utf-8',
             'Cache-Control': 'public, max-age=300, s-maxage=300'
